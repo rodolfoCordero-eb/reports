@@ -10,6 +10,7 @@ class Single:
         self.sts_client = boto3.client("sts")
         self.set_caller_identity()
         self.file_paths="./excel_files"
+        self.draw_path="./images"
         pass
 
     def set_caller_identity(self):
@@ -19,8 +20,25 @@ class Single:
         print(f"\n👤 UserId: {userId}")
         print(f"\n🧾 AccountId: {account}")
         return self.identity
-    
     def execute(self,strategy):
+        if "draw" in strategy.__class__.__name__:
+            print("Strategy Draw")
+            self.execute_draw(strategy)
+        if "action" in strategy.__class__.__name__:
+            print("Strategy Action")
+            self.execute_excel(strategy)
+    def execute_draw(self,strategy):
+        print("\n\n----------------------------------")
+        print(f"👓 {strategy.name()} Draw")
+        session  = boto3.Session()
+        if (session):
+            acc_id = self.set_caller_identity()["UserId"]
+            acc_name = self.set_caller_identity()["Account"]
+            print(f"🔍 Scanning account {acc_id} ({acc_name})...!!")
+            strategy.run(session,acc_id, acc_name,self.draw_path)
+        print("----------------------------------\n\n")
+
+    def execute_excel(self,strategy):
         print("\n\n----------------------------------")
         print(f"👓 {strategy.name()}")
         file_name = f"{self.file_paths}/{strategy.name()}.xlsx"

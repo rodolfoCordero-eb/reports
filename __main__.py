@@ -1,6 +1,7 @@
 from sessions import Session
 from single import Single
 from actions import *
+from draw import *
 import argparse
 import importlib
 
@@ -16,7 +17,8 @@ def mode_single(strategy):
 
 def load_strategy(class_name):
     try:
-        module = importlib.import_module(f"actions.{class_name}")
+        module_name = "actions" if "action" in class_name else "draw"
+        module = importlib.import_module(f"{module_name}.{class_name}")
         clase = getattr(module, class_name)
         return clase()
     except (ImportError, AttributeError) as e:
@@ -31,6 +33,7 @@ def main():
     
     args = parser.parse_args()
     strategy = load_strategy(args.strategy)
+    
     if args.mode == "single":
         mode_single(strategy)
     elif args.mode == "assume":

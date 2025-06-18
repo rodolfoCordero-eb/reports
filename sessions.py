@@ -12,6 +12,7 @@ class Session:
         self.set_caller_identity()
         self.list_accounts()
         self.file_paths="./excel_files"
+        self.draw_path="./images"
         pass
 
     def assume_role(self,account_id, role_name):
@@ -45,6 +46,14 @@ class Session:
         print(f"\n🧾 AccountId: {account}")
     
     def execute(self,strategy):
+        if "draw" in strategy.__class__.__name__:
+            print("Strategy Draw")
+            self.execute_draw(strategy)
+        if "action" in strategy.__class__.__name__:
+            print("Strategy Action")
+            self.execute_excel(strategy)
+
+    def execute_excel(self,strategy):
         print("\n\n----------------------------------")
         print(f"👓 {strategy.name()}")
         file_name = f"{self.file_paths}/{strategy.name()}.xlsx"
@@ -57,7 +66,7 @@ class Session:
         for acc in self.accounts:
             acc_id = acc["Id"]
             acc_name = acc["Name"]
-            print(f"🔍 Scanning account {acc_id} ({acc_name})...")
+            print(f"🔍 Scanning account {acc_id} ({acc_name})...!!!!!!")
             session  =self.assume_role(acc_id,self.ROLE_NAME)
             if (session):
                 result = strategy.run(session,acc_id, acc_name)
@@ -71,4 +80,17 @@ class Session:
                     print(f"\n📁 Writing File {strategy.name()} with {acc_name} content")
                     with pd.ExcelWriter(file_name,engine='openpyxl', mode = 'a') as writer:
                         result.to_excel(writer,sheet_name=acc_name,index=False)
+        print("----------------------------------\n\n")
+
+    def execute_draw(self,strategy):
+        print("\n\n----------------------------------")
+        print(f"👓 {strategy.name()} Draw")
+
+        for acc in self.accounts:
+            acc_id = acc["Id"]
+            acc_name = acc["Name"]
+            print(f"🔍 Scanning account {acc_id} ({acc_name})...!!")
+            session  =self.assume_role(acc_id,self.ROLE_NAME)
+            if (session):
+                strategy.run(session,acc_id, acc_name,self.draw_path)
         print("----------------------------------\n\n")

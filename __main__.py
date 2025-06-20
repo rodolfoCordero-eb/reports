@@ -5,10 +5,10 @@ from draw import *
 import argparse
 import importlib
 
-def mode_assume(strategy):
+def mode_assume(strategy,region=None):
     print(f"🎇 Assume mode")
     session=Session()
-    session.execute(strategy)
+    session.execute(strategy,region)
 
 def mode_single(strategy,region=None):
     print(f"🎇 Single mode")
@@ -39,7 +39,7 @@ def main():
     if args.mode == "single":
         mode_single(strategy,args.region)
     elif args.mode == "assume":
-        mode_assume(strategy)
+        mode_assume(strategy,args.region)
 
 if __name__ == "__main__":
     print("\n✅ Starting...")

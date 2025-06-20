@@ -5,7 +5,8 @@ from openpyxl import load_workbook
 import os
 
 class Single:
-    def __init__(self,session=None):
+    def __init__(self,session=None,name=None):
+        self.account_name=name
         if not session:
             session= boto3.Session()
         self.session=session
@@ -21,7 +22,10 @@ class Single:
 
         self.userId=self.identity["UserId"]
         self.account_id = self.identity["Account"]
-        self.account_name = org.describe_account(AccountId=self.account_id).get('Account').get('Name')
+        if not self.account_name:
+            self.account_name = org.describe_account(AccountId=self.account_id).get('Account').get('Name')
+
+        
         print(f"🔍 Scanning account {self.account_id}-({self.account_name}) {self.account_name}...!!")
         return self.identity
     

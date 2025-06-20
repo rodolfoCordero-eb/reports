@@ -195,3 +195,6 @@ cython_debug/
 .cursorindexingignore
 reports
 excel_files
+*.drawio
+images/*.png
+*.png

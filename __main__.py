@@ -10,10 +10,10 @@ def mode_assume(strategy):
     session=Session()
     session.execute(strategy)
 
-def mode_single(strategy):
+def mode_single(strategy,region=None):
     print(f"🎇 Single mode")
     single=Single()
-    single.execute(strategy)
+    single.execute(strategy,region)
 
 def load_strategy(class_name):
     try:
@@ -30,12 +30,14 @@ def main():
                          required=True, help="ExcepcutionMode: 'single' o 'assume'")
     parser.add_argument("--strategy", required=True,
                         help="Name of class")
+    parser.add_argument("--region", required=False, default=None,
+                        help="Region Anme")
     
     args = parser.parse_args()
     strategy = load_strategy(args.strategy)
     
     if args.mode == "single":
-        mode_single(strategy)
+        mode_single(strategy,args.region)
     elif args.mode == "assume":
         mode_assume(strategy)
 

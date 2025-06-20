@@ -1,66 +1,73 @@
+import xml.etree.ElementTree as ET
+import uuid
 import os
-import boto3
 from .draw_strategy import DrawStrategy
 class drawio_draw(DrawStrategy):
     def name(self):
         return self.__class__.__name__
-    def run(self,session, acc_id, acc_name, path="./images"):
-        regions = session.get_available_regions("ec2")
+    
+    def draw(self, elements, path, region):
+        os.makedirs(path, exist_ok=True)
+        file_path = os.path.join(path, f"{region}.drawio")
 
-        for region in regions:
-            reg_sess = boto3.Session(profile_name=session.profile_name, region_name=region)
-            ec2 = reg_sess.client("ec2")
-            rds = reg_sess.client("rds")
+        def mx_cell(id, parent, value, style="shape=ellipse"):
+            return ET.Element("mxCell", {
+                "id": id,
+                "value": value,
+                "style": style,
+                "vertex": "1",
+                "parent": parent
+            })
 
-            try:
-                elb = reg_sess.client("elbv2")
-                lbs = elb.describe_load_balancers().get("LoadBalancers", [])
-            except:
-                lbs = []
+        def mx_geometry():
+            geo = ET.Element("mxGeometry", {"x": "0", "y": "0", "width": "120", "height": "60"})
+            geo.set("as", "geometry")
+            return geo
 
-            instances = [i for r in ec2.describe_instances().get("Reservations", []) for i in r.get("Instances", [])]
-            vpce = ec2.describe_vpc_endpoints().get("VpcEndpoints", [])
-            dbs = rds.describe_db_instances().get("DBInstances", [])
-            peerings = ec2.describe_vpc_peering_connections().get("VpcPeeringConnections", [])
-            tgw = ec2.describe_transit_gateways().get("TransitGateways", [])
-            vpns = ec2.describe_vpn_connections().get("VpnConnections", [])
+        def add_node(parent, label, style):
+            node_id = str(uuid.uuid4())[:8]
+            cell = mx_cell(node_id, "1", label, style)
+            cell.append(mx_geometry())
+            parent.append(cell)
+            return node_id
 
-            nodes = []
-            x, y = 40, 40
-            node_id = 10
+        # XML básico
+        mxfile = ET.Element("mxfile")
+        diagram = ET.SubElement(mxfile, "diagram", name=region)
+        root = ET.Element("mxGraphModel")
+        root.append(ET.Element("root"))
 
-            def node(label, x, y):
-                nonlocal node_id
-                id_ = str(node_id)
-                node_id += 1
-                return f'<mxCell id="{id_}" value="{label}" style="shape=swimlane;" vertex="1" parent="1"><mxGeometry x="{x}" y="{y}" width="120" height="60" as="geometry"/></mxCell>'
+        # root contiene nodos visuales
+        root_elt = root.find("root")
+        root_elt.append(ET.Element("mxCell", id="0"))
+        root_elt.append(ET.Element("mxCell", id="1", parent="0"))
 
-            for i in instances:
-                nodes.append(node(f"EC2: {i['InstanceId']}", x, y)); y += 80
-            for e in vpce:
-                nodes.append(node(f"VPCE: {e['VpcEndpointId']}", x, y)); y += 80
-            for d in dbs:
-                nodes.append(node(f"RDS: {d['DBInstanceIdentifier']}", x, y)); y += 80
-            for l in lbs:
-                nodes.append(node(f"LB: {l['LoadBalancerName']}", x, y)); y += 80
-            for p in peerings:
-                nodes.append(node(f"Peering: {p['VpcPeeringConnectionId']}", x, y)); y += 80
-            for g in tgw:
-                nodes.append(node(f"TGW: {g['TransitGatewayId']}", x, y)); y += 80
-            for vpn in vpns:
-                nodes.append(node(f"VPN: {vpn['VpnConnectionId']}", x, y)); y += 80
+        # Crear VPC como contenedor lógico (no se visualiza como cluster en drawio)
+        vpc = elements.get("vpcs", [{}])[0]
+        vpc_name = next((tag["Value"] for tag in vpc.get("Tags", []) if tag["Key"] == "Name"), vpc.get("VpcId", "VPC"))
+        vpc_id = add_node(root_elt, vpc_name, "shape=swimlane")
 
-            xml = f"""<mxGraphModel dx='1270' dy='894' grid='1' gridSize='10'>
-            <root>
-                <mxCell id='0'/>
-                <mxCell id='1' parent='0'/>
-                {''.join(nodes)}
-            </root>
-            </mxGraphModel>"""
+        # Subnets e instancias
+        for subnet in elements.get("subnets", []):
+            subnet_name = next((tag["Value"] for tag in subnet.get("Tags", []) if tag["Key"] == "Name"), subnet["SubnetId"])
+            subnet_id = add_node(root_elt, subnet_name, "shape=rectangle;fillColor=#e3f2fd")
 
-            out_dir = os.path.join(path, f"{acc_name}-{acc_id}")
-            os.makedirs(out_dir, exist_ok=True)
-            filename = os.path.join(out_dir, f"{region}.drawio")
-            with open(filename, "w") as f:
-                print(f"\n📁 Writing File {filename} with {acc_name} content")
-                f.write(xml)
+            for instance in elements.get("instances", []):
+                if instance.get("SubnetId") == subnet["SubnetId"]:
+                    inst_id = add_node(root_elt, instance["InstanceId"], "shape=ellipse;fillColor=#ffffff")
+                    # Conexión
+                    edge = ET.Element("mxCell", {
+                        "id": str(uuid.uuid4())[:8],
+                        "style": "endArrow=block",
+                        "edge": "1",
+                        "source": subnet_id,
+                        "target": inst_id,
+                        "parent": "1"
+                    })
+                    edge.append(mx_geometry())
+                    root_elt.append(edge)
+
+        # Guardar archivo drawio
+        diagram.append(root)
+        tree = ET.ElementTree(mxfile)
+        tree.write(file_path, encoding="utf-8", xml_declaration=True)

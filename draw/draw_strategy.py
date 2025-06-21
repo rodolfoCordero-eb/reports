@@ -19,11 +19,12 @@ class DrawStrategy(ABC):
             ec2 = session.client("ec2",region_name=region)
             rds = session.client("rds",region_name=region)
             asg = session.client("autoscaling", region_name=region)
-            elements = self._collect_elements(session,ec2,asg,rds,region)
+            tg= session.client("elbv2", region_name=region)
+            elements = self._collect_elements(session,ec2,asg,rds,tg,region)
             tmp_path = os.path.join(path, f"{acc_name}-{acc_id}")
             self.draw(elements,tmp_path,region)
 
-    def _collect_elements(self, session, ec2,asg, rds, region):
+    def _collect_elements(self, session, ec2,asg, rds,tg, region):
         elements = {}
 
         def safe_get(client_call, label, key):
@@ -53,7 +54,7 @@ class DrawStrategy(ABC):
         elements["vpns"] = safe_get(ec2.describe_vpn_connections, "VPN connections", "VpnConnections")
         elements["vpcs"] = safe_get(ec2.describe_vpcs, "VPCs", "Vpcs")
         elements["subnets"] = safe_get(ec2.describe_subnets, "subnets", "Subnets")
-
+        elements["route_tables"] = safe_get(ec2.describe_route_tables,"routetables","RouteTables")
         # RDS
         elements["dbs"] = safe_get(rds.describe_db_instances, "RDS instances", "DBInstances")
 
@@ -65,6 +66,8 @@ class DrawStrategy(ABC):
         elements['asg'] = asg.describe_auto_scaling_groups().get("AutoScalingGroups", [])
         elements['launch_configs'] = asg.describe_launch_configurations().get("LaunchConfigurations", [])
         elements['launch_templates'] = ec2.describe_launch_templates().get("LaunchTemplates", [])
+
+        elements['tg']= tg.describe_target_groups()
 
         # Optional: summary
         try:
@@ -89,6 +92,8 @@ class DrawStrategy(ABC):
             ("asg", "Auto Scaling Groups"),
             ("launch_configs", "Launch Config"),
             ("launch_templates", "Launch Template"),
+            ("tg", "Target Group"),
+            ("route_tables", "Route Tables")
         ]
 
         for key, label in keys_to_count:

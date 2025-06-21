@@ -1,9 +1,13 @@
-from diagrams import Diagram, Cluster, Node
-from diagrams.aws.network import VPC, PrivateSubnet, PublicSubnet, InternetGateway, NATGateway
-from diagrams.aws.compute import EC2, EC2AutoScaling,EC2ImageBuilder
+from diagrams import Diagram, Cluster, Edge
+from diagrams.aws.compute import EC2, AutoScaling
+from diagrams.aws.network import ELB, VPC, Endpoint, NATGateway
 from diagrams.aws.database import RDS
-from diagrams.aws.network import Endpoint, VpnConnection, TransitGateway
-from diagrams.aws.network import ELB
+from diagrams.aws.security import Shield
+from diagrams.aws.management import Cloudwatch
+from diagrams.aws.network import TransitGateway, VpnConnection, PrivateSubnet, PublicSubnet
+from diagrams.aws.compute import EC2ImageBuilder
+from diagrams.generic.blank import Blank
+
 import os
 from .draw_strategy import DrawStrategy
 
@@ -11,122 +15,116 @@ class png_draw(DrawStrategy):
 
     def name(self):
         return self.__class__.__name__
-    
 
     def draw(self, elements, path, region):
-        os.makedirs(path, exist_ok=True)
-        file_path = os.path.join(path, f"{region}.png")
+        filename = os.path.join(path, f"{region}.png")
+        graph_attr = {"fontsize": "16"}
 
-        # Nombre del VPC
-        vpc_name = "VPC"
-        if elements.get("vpcs"):
-            vpc = elements["vpcs"][0]
-            vpc_name = next((tag["Value"] for tag in vpc.get("Tags", []) if tag["Key"] == "Name"), vpc["VpcId"])
+        # Construir mapa SubnetId → tipo (public/private)
+        subnet_type_map = {}
+        route_tables = elements.get("route_tables", [])
+        for rt in route_tables:
+            routes = rt.get("Routes", [])
+            associations = rt.get("Associations", [])
+            for assoc in associations:
+                subnet_id = assoc.get("SubnetId")
+                if not subnet_id:
+                    continue
+                for r in routes:
+                    gw = r.get("GatewayId", "")
+                    if gw.startswith("igw-"):
+                        subnet_type_map[subnet_id] = "public"
+                        break
+                else:
+                    subnet_type_map.setdefault(subnet_id, "private")
 
-        # Clasificación de subnets
-        public_subnets = []
-        private_subnets = []
+        with Diagram(f"AWS Diagram - {region}", filename=filename, outformat="png", show=False, graph_attr=graph_attr):
+            ec2_map = {}
+            asg_map = {}
+            tg_map = {}
+            elb_map = {}
 
-        for sn in elements.get("subnets", []):
-            name = next((tag["Value"] for tag in sn.get("Tags", []) if tag["Key"] == "Name"), sn["SubnetId"])
-            if sn.get("MapPublicIpOnLaunch"):
-                public_subnets.append((name, sn["SubnetId"]))
-            else:
-                private_subnets.append((name, sn["SubnetId"]))
+            for vpc in elements.get("vpcs", []):
+                vpc_id = vpc["VpcId"]
+                with Cluster(f"VPC {vpc_id}"):
 
-        # Agrupar instancias por subnet
-        instances_by_subnet = {}
-        for inst in elements.get("instances", []):
-            subnet_id = inst.get("SubnetId")
-            if subnet_id:
-                instances_by_subnet.setdefault(subnet_id, []).append(inst)
+                    # Subnets del VPC
+                    for subnet in elements.get("subnets", []):
+                        if subnet["VpcId"] != vpc_id:
+                            continue
 
-        # Obtener instancias administradas por ASG
-        asg_instance_ids = set()
-        for asg in elements.get("asg", []):
-            asg_instance_ids.update(i["InstanceId"] for i in asg.get("Instances", []))
+                        subnet_id = subnet["SubnetId"]
+                        tipo = subnet_type_map.get(subnet_id, "unknown")
+                        label = f"{tipo.capitalize()} Subnet {subnet_id}"
 
-        with Diagram(f"AWS Network - {region}", filename=file_path, outformat="png", show=False, direction="TB"):
-            with Cluster(vpc_name):
-                igw = InternetGateway("IGW")
-                nat = NATGateway("NAT Gateway")
+                        with Cluster(label):
+                            if tipo == "public":
+                                _ = PublicSubnet(label)
+                            elif tipo == "private":
+                                _ = PrivateSubnet(label)
+                            else:
+                                _ = Blank(label)
 
-                # Subnets públicas
-                for name, subnet_id in public_subnets:
-                    with Cluster(f"Public Subnet\n{name}"):
-                        for inst in instances_by_subnet.get(subnet_id, []):
-                            if inst["InstanceId"] in asg_instance_ids:
-                                continue  # Ya será dibujada desde el ASG
-                            ec2_node = EC2(inst["InstanceId"])
-                            igw >> ec2_node
+                            # EC2 Instances en esta subnet
+                            for ec2 in elements.get("instances", []):
+                                if ec2.get("SubnetId") == subnet_id:
+                                    instance_id = ec2.get("InstanceId")
+                                    name = next((t["Value"] for t in ec2.get("Tags", []) if t["Key"] == "Name"), instance_id)
+                                    node = EC2(name)
+                                    ec2_map[instance_id] = node
 
-                # Subnets privadas
-                for name, subnet_id in private_subnets:
-                    with Cluster(f"Private Subnet\n{name}"):
-                        for inst in instances_by_subnet.get(subnet_id, []):
-                            if inst["InstanceId"] in asg_instance_ids:
-                                continue  # Ya será dibujada desde el ASG
-                            ec2_node = EC2(inst["InstanceId"])
-                            nat >> ec2_node
+                            # ASGs en esta subnet (por VPCZoneIdentifier)
+                            for asg in elements.get("asg", []):
+                                subnet_ids = [s.strip() for s in asg.get("VPCZoneIdentifier", "").split(",") if s.strip()]
+                                if subnet_id in subnet_ids:
+                                    asg_name = asg["AutoScalingGroupName"]
+                                    instance_count = len(asg.get("Instances", []))
+                                    label = f"{asg_name}\n{instance_count} EC2"
+                                    node = AutoScaling(label)
+                                    asg_map[asg_name] = node
 
-            # Auto Scaling Groups
-            if elements.get("asg"):
-                with Cluster("Auto Scaling Groups"):
-                    for group in elements["asg"]:
-                        group_name = group["AutoScalingGroupName"]
-                        asg_node = EC2AutoScaling(group_name)
-                        lt = group.get("LaunchTemplate")
-                        lc_name = group.get("LaunchConfigurationName")
+                                    lt = asg.get("LaunchTemplate")
+                                    lc_name = asg.get("LaunchConfigurationName")
 
-                        if lt:
-                            lt_name = lt.get("LaunchTemplateName", "LaunchTemplate")
-                            lt_node =  EC2ImageBuilder(lt_name)
-                            lt_node >> asg_node
-                        elif lc_name:
-                            lc_node = EC2ImageBuilder(lc_name)
-                            lc_node >> asg_node
-                        ec2_node = EC2(f"Instances")
-                        asg_node >> ec2_node
+                                    if lt:
+                                        lt_label = lt.get("LaunchTemplateName", "LaunchTemplate")
+                                        lt_node = EC2ImageBuilder(lt_label)
+                                        node >> lt_node
+                                    elif lc_name:
+                                        lc_node = Blank(f"LaunchConfig: {lc_name}")
+                                        node >> lc_node
 
+                            # RDS en esta subnet
+                            for rds in elements.get("dbs", []):
+                                subnet_group = rds.get("DBSubnetGroup", {})
+                                if any(s["SubnetIdentifier"] == subnet_id for s in subnet_group.get("Subnets", [])):
+                                    db_id = rds["DBInstanceIdentifier"]
+                                    _ = RDS(db_id)
 
-                        # Instancias del ASG
-                       # for inst in:
-                       #     
-                       #     asg_node >> ec2_node
+                            # ELB en esta subnet
+                            for lb in elements.get("lbs", []):
+                                if subnet_id in lb.get("Subnets", []):
+                                    name = lb.get("LoadBalancerName")
+                                    elb_node = ELB(name)
+                                    elb_map[name] = elb_node
 
-            # Load Balancers
-            if elements.get("lbs"):
-                with Cluster("Load Balancers"):
-                    for lb in elements["lbs"]:
-                        ELB(lb["LoadBalancerName"])
+            # Target Groups
+            for tg in elements.get("target_groups", []):
+                tg_name = tg.get("TargetGroupName", "TG")
+                tg_node = Shield(tg_name)
+                tg_map[tg["TargetGroupArn"]] = tg_node
 
-            # RDS
-            if elements.get("dbs"):
-                with Cluster("Databases"):
-                    for db in elements["dbs"]:
-                        RDS(db["DBInstanceIdentifier"])
+            # Conectar ELB -> Target Group
+            for listener in elements.get("listeners", []):
+                lb_name = listener.get("LoadBalancerName")
+                tg_arn = listener.get("DefaultActions", [{}])[0].get("TargetGroupArn")
+                if lb_name in elb_map and tg_arn in tg_map:
+                    elb_map[lb_name] >> tg_map[tg_arn]
 
-            # VPC Endpoints
-            if elements.get("vpce"):
-                with Cluster("Endpoints"):
-                    for ep in elements["vpce"]:
-                        name = ep.get("VpcEndpointId", ep.get("ServiceName", "VPCE"))
-                        Endpoint(name)
-
-            # VPC Peerings
-            if elements.get("peerings"):
-                with Cluster("VPC Peerings"):
-                    for p in elements["peerings"]:
-                        TransitGateway(p["VpcPeeringConnectionId"])
-
-            # Transit Gateways
-            if elements.get("tgw"):
-                with Cluster("Transit Gateways"):
-                    for t in elements["tgw"]:
-                        TransitGateway(t["TransitGatewayId"])
-
-            # VPN Connections
-            if elements.get("vpns"):
-                with Cluster("VPN Connections"):
-                    for v in elements["vpns"]:
-                        VpnConnection(v["VpnConnectionId"])
+            # Conectar Target Group -> EC2
+            for tg in elements.get("target_groups", []):
+                tg_arn = tg["TargetGroupArn"]
+                for target in tg.get("Targets", []):
+                    instance_id = target.get("Id")
+                    if instance_id in ec2_map:
+                        tg_map[tg_arn] >> ec2_map[instance_id]
